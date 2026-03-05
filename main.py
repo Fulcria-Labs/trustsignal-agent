@@ -19,7 +19,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
 from erc8004_client import ERC8004Client
-from signal_engine import SignalEngine
+from signal_engine import Direction, SignalEngine
 
 load_dotenv()
 
@@ -153,6 +153,8 @@ async def root():
         "endpoints": {
             "/signal/free": "Free delayed trading signal",
             "/signal/premium": "Premium real-time signal (x402 payment required)",
+            "/watchlist": "Multi-asset signal scan",
+            "/trade-intent": "EIP-712 signed trade intent (POST)",
             "/identity": "ERC-8004 agent identity info",
             "/reputation": "On-chain reputation summary",
             "/track-record": "Signal generation statistics",
@@ -326,6 +328,82 @@ async def record_outcome(
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/watchlist")
+async def watchlist(
+    assets: str = Query(
+        default="bitcoin,ethereum,solana",
+        description="Comma-separated CoinGecko coin IDs",
+    ),
+):
+    """Get signals for multiple assets at once."""
+    coin_ids = [a.strip() for a in assets.split(",")]
+    results = []
+    for coin_id in coin_ids[:10]:  # max 10 assets
+        try:
+            market_data = await engine.get_market_data(coin_id)
+            signal = engine.analyze_technicals(market_data)
+            results.append({
+                "asset": coin_id,
+                "price": market_data["current_price"],
+                "change_24h": market_data.get("change_24h"),
+                "direction": signal.direction.value,
+                "confidence": round(signal.confidence, 3),
+                "entry": signal.entry_price,
+                "target": signal.target_price,
+                "stop": signal.stop_loss,
+                "reasoning": signal.reasoning,
+                "signal_id": signal.signal_id,
+            })
+        except Exception as e:
+            results.append({"asset": coin_id, "error": str(e)})
+    return {"watchlist": results, "count": len(results)}
+
+
+@app.post("/trade-intent")
+async def create_trade_intent(
+    signal_id: str = Query(..., description="Signal ID to create trade intent for"),
+    amount_usd: float = Query(default=100.0, description="Trade amount in USD"),
+):
+    """Create an EIP-712 signed trade intent from a signal.
+
+    This is a key ERC-8004 requirement: agents sign typed data
+    for verifiable, auditable trade decisions.
+    """
+    if not erc8004 or agent_id is None:
+        return JSONResponse(status_code=400, content={"error": "Agent not registered"})
+
+    signal = next((s for s in engine.signals_history if s.signal_id == signal_id), None)
+    if not signal:
+        return JSONResponse(status_code=404, content={"error": "Signal not found"})
+
+    if signal.direction == Direction.NEUTRAL:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Cannot create trade intent for neutral signal"},
+        )
+
+    action = "buy" if signal.direction == Direction.LONG else "sell"
+    deadline = int(time.time()) + 3600  # 1 hour validity
+
+    signed_intent = erc8004.sign_trade_intent(
+        agent_id=agent_id,
+        action=action,
+        asset=signal.asset,
+        amount_usd=amount_usd,
+        price=signal.entry_price,
+        signal_id=signal.signal_id,
+        deadline=deadline,
+    )
+
+    return {
+        "trade_intent": signed_intent,
+        "signal": signal.to_dict(),
+        "amount_usd": amount_usd,
+        "action": action,
+        "deadline_utc": datetime.fromtimestamp(deadline, tz=timezone.utc).isoformat(),
+    }
 
 
 if __name__ == "__main__":

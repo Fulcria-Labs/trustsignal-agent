@@ -126,6 +126,64 @@ class ERC8004Client:
         """Get the owner of an agent NFT."""
         return self.identity.functions.ownerOf(agent_id).call()
 
+    def sign_trade_intent(
+        self,
+        agent_id: int,
+        action: str,
+        asset: str,
+        amount_usd: float,
+        price: float,
+        signal_id: str,
+        deadline: int,
+    ) -> dict:
+        """Sign an EIP-712 typed trade intent.
+
+        Returns the full typed data + signature for on-chain verification.
+        """
+        domain = {
+            "name": "TrustSignal",
+            "version": "1",
+            "chainId": self.chain_id,
+            "verifyingContract": self.identity.address,
+        }
+        types = {
+            "TradeIntent": [
+                {"name": "agentId", "type": "uint256"},
+                {"name": "action", "type": "string"},
+                {"name": "asset", "type": "string"},
+                {"name": "amountUsd", "type": "uint256"},
+                {"name": "price", "type": "uint256"},
+                {"name": "signalId", "type": "string"},
+                {"name": "deadline", "type": "uint256"},
+                {"name": "nonce", "type": "uint256"},
+            ],
+        }
+        nonce = self.w3.eth.get_transaction_count(self.account.address)
+        message = {
+            "agentId": agent_id,
+            "action": action,
+            "asset": asset,
+            "amountUsd": int(amount_usd * 100),  # cents
+            "price": int(price * 100),  # cents
+            "signalId": signal_id,
+            "deadline": deadline,
+            "nonce": nonce,
+        }
+        signable = encode_typed_data(
+            domain_data=domain,
+            message_types=types,
+            primary_type="TradeIntent",
+            message_data=message,
+        )
+        signed = self.account.sign_message(signable)
+        return {
+            "domain": domain,
+            "types": types,
+            "message": message,
+            "signature": signed.signature.hex(),
+            "signer": self.account.address,
+        }
+
     @property
     def address(self) -> str:
         return self.account.address
