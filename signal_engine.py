@@ -46,12 +46,20 @@ class SignalEngine:
     """Generates trading signals from market data using technical analysis."""
 
     COINGECKO_URL = "https://api.coingecko.com/api/v3"
+    CACHE_TTL = 60  # seconds
 
     def __init__(self):
         self.signals_history: list[Signal] = []
+        self._cache: dict[str, tuple[float, dict]] = {}
 
     async def get_market_data(self, coin_id: str = "bitcoin") -> dict:
-        """Fetch current market data from CoinGecko."""
+        """Fetch current market data from CoinGecko (cached for 60s)."""
+        now = time.time()
+        if coin_id in self._cache:
+            ts, data = self._cache[coin_id]
+            if now - ts < self.CACHE_TTL:
+                return data
+
         async with httpx.AsyncClient() as client:
             # Current price
             price_resp = await client.get(
@@ -69,12 +77,14 @@ class SignalEngine:
             )
             ohlc_data = ohlc_resp.json()
 
-        return {
+        result = {
             "coin_id": coin_id,
             "current_price": price_data.get(coin_id, {}).get("usd", 0),
             "change_24h": price_data.get(coin_id, {}).get("usd_24h_change", 0),
             "ohlc": ohlc_data[-20:] if isinstance(ohlc_data, list) else [],
         }
+        self._cache[coin_id] = (now, result)
+        return result
 
     def analyze_technicals(self, market_data: dict) -> Signal:
         """Generate a trading signal from market data using simple technicals."""
