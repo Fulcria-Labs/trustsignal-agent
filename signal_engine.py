@@ -112,25 +112,70 @@ class SignalEngine:
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
 
-        # Signal logic
-        if sma_5 > sma_10 and rsi < 70:
+        # Momentum: recent price change relative to range
+        price_range = max(closes) - min(closes) if max(closes) != min(closes) else 1
+        momentum = (price - closes[0]) / price_range  # -1 to 1
+
+        # Volatility (normalized standard deviation)
+        mean_price = sum(closes) / len(closes)
+        variance = sum((c - mean_price) ** 2 for c in closes) / len(closes)
+        volatility = (variance ** 0.5) / mean_price
+
+        # Composite scoring: trend + momentum + RSI
+        trend_score = (sma_5 - sma_10) / sma_10 * 100  # % above/below
+        rsi_score = (rsi - 50) / 50  # -1 to 1, positive = bullish
+        composite = trend_score * 0.4 + momentum * 0.3 + rsi_score * 0.3
+
+        # Adjust risk based on volatility
+        risk_mult = max(1.0, min(3.0, volatility * 50))
+
+        # Signal logic with RSI extremes
+        reasons = []
+        if rsi > 75:
+            reasons.append(f"RSI overbought ({rsi:.0f})")
+        elif rsi < 25:
+            reasons.append(f"RSI oversold ({rsi:.0f})")
+
+        if sma_5 > sma_10:
+            reasons.append(f"SMA5 ({sma_5:.0f}) > SMA10 ({sma_10:.0f})")
+        else:
+            reasons.append(f"SMA5 ({sma_5:.0f}) < SMA10 ({sma_10:.0f})")
+
+        if abs(change_24h) > 3:
+            reasons.append(f"24h change {change_24h:+.1f}%")
+
+        if composite > 0.5 and rsi < 75:
             direction = Direction.LONG
-            confidence = min(0.85, 0.5 + (sma_5 - sma_10) / sma_10 * 10)
-            target = price * 1.03
-            stop = price * 0.98
-            reasoning = f"Bullish: SMA5 ({sma_5:.0f}) > SMA10 ({sma_10:.0f}), RSI={rsi:.0f}"
-        elif sma_5 < sma_10 and rsi > 30:
+            confidence = min(0.9, 0.5 + composite * 0.1)
+            target = price * (1 + 0.02 * risk_mult)
+            stop = price * (1 - 0.015 * risk_mult)
+            reasons.insert(0, "Bullish")
+        elif composite < -0.5 and rsi > 25:
             direction = Direction.SHORT
-            confidence = min(0.85, 0.5 + (sma_10 - sma_5) / sma_10 * 10)
+            confidence = min(0.9, 0.5 + abs(composite) * 0.1)
+            target = price * (1 - 0.02 * risk_mult)
+            stop = price * (1 + 0.015 * risk_mult)
+            reasons.insert(0, "Bearish")
+        elif rsi > 80:
+            direction = Direction.SHORT
+            confidence = min(0.75, 0.4 + (rsi - 80) * 0.02)
             target = price * 0.97
             stop = price * 1.02
-            reasoning = f"Bearish: SMA5 ({sma_5:.0f}) < SMA10 ({sma_10:.0f}), RSI={rsi:.0f}"
+            reasons.insert(0, "Overbought reversal")
+        elif rsi < 20:
+            direction = Direction.LONG
+            confidence = min(0.75, 0.4 + (20 - rsi) * 0.02)
+            target = price * 1.03
+            stop = price * 0.98
+            reasons.insert(0, "Oversold reversal")
         else:
             direction = Direction.NEUTRAL
             confidence = 0.3
             target = price
-            stop = price * 0.95
-            reasoning = f"Neutral: SMA crossover inconclusive, RSI={rsi:.0f}"
+            stop = price * (1 - 0.02 * risk_mult)
+            reasons.insert(0, "Neutral")
+
+        reasoning = ". ".join(reasons)
 
         signal = Signal(
             asset=market_data["coin_id"],

@@ -43,29 +43,42 @@ engine = SignalEngine()
 
 def setup_x402_middleware(app: FastAPI):
     """Set up x402 payment middleware for premium endpoints."""
+    if not PAY_TO:
+        print("No PAY_TO address - x402 payment gating disabled")
+        return False
     try:
         from x402 import x402ResourceServer
-        from x402.http.facilitator_client import HTTPFacilitatorClient
-        from x402.http.middleware.fastapi import PaymentMiddlewareASGI
-        from x402.http.types import PaymentOption, RouteConfig
+        from x402.http.middleware.fastapi import payment_middleware
 
-        payment_option = PaymentOption(
-            scheme="exact",
-            pay_to=PAY_TO,
-            price="$0.01",
-            network=NETWORK,
-        )
+        facilitator_url = FACILITATOR_URL
+        # Create facilitator client
+        try:
+            from x402.http import HTTPFacilitatorClient
+            facilitator = HTTPFacilitatorClient(facilitator_url)
+        except ImportError:
+            from x402 import FacilitatorClient
+            facilitator = FacilitatorClient(facilitator_url)
 
-        route_config: RouteConfig = {
-            "/signal/premium": {
-                "payment_options": [payment_option],
+        server = x402ResourceServer(facilitator)
+
+        routes = {
+            "GET /signal/premium": {
+                "accepts": {
+                    "scheme": "exact",
+                    "payTo": PAY_TO,
+                    "price": "$0.01",
+                    "network": NETWORK,
+                },
                 "description": "Premium real-time trading signal with AI analysis",
             },
         }
 
-        facilitator = HTTPFacilitatorClient(FACILITATOR_URL)
-        resource_server = x402ResourceServer(facilitator)
-        middleware = PaymentMiddlewareASGI(app, resource_server, route_config)
+        mw = payment_middleware(routes, server, sync_facilitator_on_start=True)
+
+        @app.middleware("http")
+        async def x402_mw(request, call_next):
+            return await mw(request, call_next)
+
         return True
     except Exception as e:
         print(f"x402 middleware setup failed (running without payments): {e}")
