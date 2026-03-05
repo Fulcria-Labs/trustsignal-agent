@@ -43,7 +43,11 @@ class Signal:
 
 
 class SignalEngine:
-    """Generates trading signals from market data using technical analysis."""
+    """Generates trading signals from market data using technical analysis.
+
+    Supports multi-timeframe analysis by fetching 7-day and 30-day OHLC
+    data for short-term and medium-term confluence.
+    """
 
     COINGECKO_URL = "https://api.coingecko.com/api/v3"
     CACHE_TTL = 60  # seconds
@@ -69,26 +73,94 @@ class SignalEngine:
             )
             price_data = price_resp.json()
 
-            # OHLC data (last 7 days)
-            ohlc_resp = await client.get(
+            # OHLC data: short-term (7 days, ~4h candles) and medium-term (30 days, ~daily)
+            ohlc_7d_resp = await client.get(
                 f"{self.COINGECKO_URL}/coins/{coin_id}/ohlc",
                 params={"vs_currency": "usd", "days": "7"},
                 timeout=10,
             )
-            ohlc_data = ohlc_resp.json()
+            ohlc_7d = ohlc_7d_resp.json()
+
+            ohlc_30d_resp = await client.get(
+                f"{self.COINGECKO_URL}/coins/{coin_id}/ohlc",
+                params={"vs_currency": "usd", "days": "30"},
+                timeout=10,
+            )
+            ohlc_30d = ohlc_30d_resp.json()
 
         result = {
             "coin_id": coin_id,
             "current_price": price_data.get(coin_id, {}).get("usd", 0),
             "change_24h": price_data.get(coin_id, {}).get("usd_24h_change", 0),
-            "ohlc": ohlc_data[-20:] if isinstance(ohlc_data, list) else [],
+            "ohlc": ohlc_7d[-20:] if isinstance(ohlc_7d, list) else [],
+            "ohlc_30d": ohlc_30d[-30:] if isinstance(ohlc_30d, list) else [],
         }
         self._cache[coin_id] = (now, result)
         return result
 
+    @staticmethod
+    def _compute_indicators(closes: list[float]) -> dict:
+        """Compute technical indicators from a series of close prices."""
+        if len(closes) < 5:
+            return {}
+
+        sma_5 = sum(closes[-5:]) / 5
+        sma_10 = sum(closes[-10:]) / min(10, len(closes))
+
+        # RSI
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i - 1]
+            if diff > 0:
+                gains.append(diff)
+            else:
+                losses.append(abs(diff))
+        avg_gain = sum(gains) / len(gains) if gains else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0
+        if avg_loss == 0:
+            rs = 100 if avg_gain > 0 else 1  # All gains or flat
+        else:
+            rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        # Momentum
+        price_range = max(closes) - min(closes) if max(closes) != min(closes) else 1
+        momentum = (closes[-1] - closes[0]) / price_range
+
+        # Volatility (normalized std dev)
+        mean_price = sum(closes) / len(closes)
+        variance = sum((c - mean_price) ** 2 for c in closes) / len(closes)
+        volatility = (variance ** 0.5) / mean_price
+
+        # Trend score
+        trend_score = (sma_5 - sma_10) / sma_10 * 100
+
+        # RSI score: -1 to 1
+        rsi_score = (rsi - 50) / 50
+
+        # Composite
+        composite = trend_score * 0.4 + momentum * 0.3 + rsi_score * 0.3
+
+        return {
+            "sma_5": sma_5,
+            "sma_10": sma_10,
+            "rsi": rsi,
+            "momentum": momentum,
+            "volatility": volatility,
+            "trend_score": trend_score,
+            "rsi_score": rsi_score,
+            "composite": composite,
+        }
+
     def analyze_technicals(self, market_data: dict) -> Signal:
-        """Generate a trading signal from market data using simple technicals."""
+        """Generate a trading signal using multi-timeframe confluence.
+
+        Analyzes both short-term (4h candles, 7-day) and medium-term (daily
+        candles, 30-day) timeframes. Signals only fire when both timeframes
+        agree, improving selectivity and win rate.
+        """
         ohlc = market_data.get("ohlc", [])
+        ohlc_30d = market_data.get("ohlc_30d", [])
         price = market_data["current_price"]
         change_24h = market_data.get("change_24h", 0)
 
@@ -104,40 +176,30 @@ class SignalEngine:
                 reasoning="Insufficient data for analysis",
             )
 
-        # Simple moving averages from OHLC close prices
-        closes = [candle[4] for candle in ohlc]
-        sma_5 = sum(closes[-5:]) / 5
-        sma_10 = sum(closes[-10:]) / min(10, len(closes))
+        # Short-term indicators (4h candles)
+        closes_st = [candle[4] for candle in ohlc]
+        st = self._compute_indicators(closes_st)
 
-        # RSI approximation (simplified)
-        gains, losses = [], []
-        for i in range(1, len(closes)):
-            diff = closes[i] - closes[i - 1]
-            if diff > 0:
-                gains.append(diff)
-            else:
-                losses.append(abs(diff))
-        avg_gain = sum(gains) / len(gains) if gains else 0.001
-        avg_loss = sum(losses) / len(losses) if losses else 0.001
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
+        # Medium-term indicators (daily candles) - optional but boosts confidence
+        mt = {}
+        if ohlc_30d and len(ohlc_30d) >= 10:
+            closes_mt = [candle[4] for candle in ohlc_30d]
+            mt = self._compute_indicators(closes_mt)
 
-        # Momentum: recent price change relative to range
-        price_range = max(closes) - min(closes) if max(closes) != min(closes) else 1
-        momentum = (price - closes[0]) / price_range  # -1 to 1
-
-        # Volatility (normalized standard deviation)
-        mean_price = sum(closes) / len(closes)
-        variance = sum((c - mean_price) ** 2 for c in closes) / len(closes)
-        volatility = (variance ** 0.5) / mean_price
-
-        # Composite scoring: trend + momentum + RSI
-        trend_score = (sma_5 - sma_10) / sma_10 * 100  # % above/below
-        rsi_score = (rsi - 50) / 50  # -1 to 1, positive = bullish
-        composite = trend_score * 0.4 + momentum * 0.3 + rsi_score * 0.3
+        rsi = st["rsi"]
+        composite = st["composite"]
+        volatility = st["volatility"]
 
         # Adjust risk based on volatility
         risk_mult = max(1.0, min(3.0, volatility * 50))
+
+        # Multi-timeframe confluence: check if medium-term agrees
+        mt_agrees = True  # default if no MT data
+        mt_label = ""
+        if mt:
+            mt_composite = mt["composite"]
+            mt_rsi = mt["rsi"]
+            mt_label = f" [MT: comp={mt_composite:.1f}, RSI={mt_rsi:.0f}]"
 
         # Signal logic with RSI extremes
         reasons = []
@@ -146,23 +208,37 @@ class SignalEngine:
         elif rsi < 25:
             reasons.append(f"RSI oversold ({rsi:.0f})")
 
-        if sma_5 > sma_10:
-            reasons.append(f"SMA5 ({sma_5:.0f}) > SMA10 ({sma_10:.0f})")
+        if st["sma_5"] > st["sma_10"]:
+            reasons.append(f"SMA5 ({st['sma_5']:.0f}) > SMA10 ({st['sma_10']:.0f})")
         else:
-            reasons.append(f"SMA5 ({sma_5:.0f}) < SMA10 ({sma_10:.0f})")
+            reasons.append(f"SMA5 ({st['sma_5']:.0f}) < SMA10 ({st['sma_10']:.0f})")
 
         if abs(change_24h) > 3:
             reasons.append(f"24h change {change_24h:+.1f}%")
 
-        if composite > 0.5 and rsi < 75:
+        # Check multi-timeframe confluence for directional trades
+        if mt:
+            mt_agrees_long = mt["composite"] > -0.3  # MT not strongly bearish
+            mt_agrees_short = mt["composite"] < 0.3  # MT not strongly bullish
+        else:
+            mt_agrees_long = True
+            mt_agrees_short = True
+
+        if composite > 0.5 and rsi < 75 and mt_agrees_long:
             direction = Direction.LONG
             confidence = min(0.9, 0.5 + composite * 0.1)
+            if mt and mt["composite"] > 0.3:
+                confidence = min(0.95, confidence + 0.1)
+                reasons.append("MT confirms bullish")
             target = price * (1 + 0.02 * risk_mult)
             stop = price * (1 - 0.015 * risk_mult)
             reasons.insert(0, "Bullish")
-        elif composite < -0.5 and rsi > 25:
+        elif composite < -0.5 and rsi > 25 and mt_agrees_short:
             direction = Direction.SHORT
             confidence = min(0.9, 0.5 + abs(composite) * 0.1)
+            if mt and mt["composite"] < -0.3:
+                confidence = min(0.95, confidence + 0.1)
+                reasons.append("MT confirms bearish")
             target = price * (1 - 0.02 * risk_mult)
             stop = price * (1 + 0.015 * risk_mult)
             reasons.insert(0, "Bearish")
@@ -183,7 +259,10 @@ class SignalEngine:
             confidence = 0.3
             target = price
             stop = price * (1 - 0.02 * risk_mult)
-            reasons.insert(0, "Neutral")
+            reasons.insert(0, "Neutral - no multi-timeframe confluence")
+
+        if mt_label:
+            reasons.append(mt_label.strip())
 
         reasoning = ". ".join(reasons)
 
@@ -194,7 +273,7 @@ class SignalEngine:
             entry_price=round(price, 2),
             target_price=round(target, 2),
             stop_loss=round(stop, 2),
-            timeframe="4h",
+            timeframe="4h+daily",
             reasoning=reasoning,
         )
         self.signals_history.append(signal)
