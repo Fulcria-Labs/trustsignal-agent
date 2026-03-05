@@ -26,7 +26,7 @@ Built for the [ERC-8004 AI Trading Agents Hackathon](https://lablab.ai/ai-hackat
 
 ## Key Features
 
-1. **Technical Analysis Engine** - SMA crossover, RSI, momentum, volatility scoring with composite signal generation
+1. **Technical Analysis Engine** - Multi-timeframe analysis (4h + daily) with SMA crossover, MACD (12/26/9), RSI, Bollinger Bands, momentum, and volatility-adjusted sizing
 2. **ERC-8004 Agent Identity** - On-chain registration with verifiable identity NFT
 3. **EIP-712 Signed Trade Intents** - Cryptographically signed, typed trade decisions for auditability and on-chain execution
 4. **On-Chain Reputation** - Trading outcomes recorded as reputation feedback (PnL in basis points)

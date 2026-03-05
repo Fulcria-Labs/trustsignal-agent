@@ -33,6 +33,49 @@ class TestComputeIndicators:
         assert 0 <= result["rsi"] <= 100
 
 
+class TestMACD:
+    def test_macd_computed_with_enough_data(self):
+        closes = [100 + i * 0.5 for i in range(30)]
+        result = SignalEngine._compute_indicators(closes)
+        assert "macd_line" in result
+        assert "macd_signal" in result
+        assert "macd_histogram" in result
+        assert result["macd_line"] != 0  # Should have a non-zero MACD with trending data
+
+    def test_macd_zero_with_short_data(self):
+        closes = [100 + i for i in range(10)]
+        result = SignalEngine._compute_indicators(closes)
+        assert result["macd_line"] == 0  # Not enough data for 26-period EMA
+
+
+class TestBollingerBands:
+    def test_bb_computed(self):
+        closes = [100 + i * 0.5 for i in range(20)]
+        result = SignalEngine._compute_indicators(closes)
+        assert "bb_upper" in result
+        assert "bb_lower" in result
+        assert "bb_pct" in result
+        assert result["bb_upper"] > result["bb_lower"]
+
+    def test_bb_pct_range(self):
+        # Normal trending data should be within bands
+        closes = [100 + i * 0.3 for i in range(20)]
+        result = SignalEngine._compute_indicators(closes)
+        assert 0 <= result["bb_pct"] <= 1.5  # Can exceed 1 if price breaks above upper
+
+
+class TestEMA:
+    def test_ema_basic(self):
+        values = [10, 11, 12, 13, 14, 15]
+        ema = SignalEngine._ema(values, 3)
+        assert len(ema) == 4  # len(values) - period + 1
+        assert ema[0] == 11.0  # First EMA = SMA of first 3
+
+    def test_ema_insufficient(self):
+        ema = SignalEngine._ema([10, 11], 5)
+        assert ema == []
+
+
 class TestMultiTimeframe:
     def test_signal_with_both_timeframes(self):
         import math

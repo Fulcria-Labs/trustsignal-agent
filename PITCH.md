@@ -43,10 +43,11 @@ User/Agent Request
        v
   [Signal Engine]
   - CoinGecko market data
-  - SMA crossover analysis
-  - RSI overbought/oversold
-  - Momentum scoring
-  - Volatility-adjusted sizing
+  - Multi-timeframe analysis (4h + daily)
+  - SMA crossover + MACD (12/26/9)
+  - RSI overbought/oversold detection
+  - Bollinger Bands squeeze/breakout
+  - Momentum scoring + volatility-adjusted sizing
        |
        v
   [EIP-712 Signing]
@@ -101,7 +102,7 @@ User/Agent Request
 
 ## What's Next
 - Mainnet deployment (Base L2)
-- Multi-timeframe analysis (1h, 4h, daily)
-- Portfolio-level risk management
-- Agent-to-agent signal marketplace
+- Portfolio-level risk management with position sizing
+- Agent-to-agent signal marketplace (agents buying signals from other agents)
 - Integration with DEX execution via Risk Router
+- On-chain signal verification (publish signal hashes before outcome)

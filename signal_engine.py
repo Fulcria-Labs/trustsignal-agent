@@ -99,6 +99,17 @@ class SignalEngine:
         return result
 
     @staticmethod
+    def _ema(values: list[float], period: int) -> list[float]:
+        """Compute exponential moving average."""
+        if len(values) < period:
+            return []
+        multiplier = 2 / (period + 1)
+        ema = [sum(values[:period]) / period]
+        for v in values[period:]:
+            ema.append((v - ema[-1]) * multiplier + ema[-1])
+        return ema
+
+    @staticmethod
     def _compute_indicators(closes: list[float]) -> dict:
         """Compute technical indicators from a series of close prices."""
         if len(closes) < 5:
@@ -132,14 +143,54 @@ class SignalEngine:
         variance = sum((c - mean_price) ** 2 for c in closes) / len(closes)
         volatility = (variance ** 0.5) / mean_price
 
+        # MACD (12/26/9 EMA)
+        macd_line = 0.0
+        macd_signal = 0.0
+        macd_histogram = 0.0
+        if len(closes) >= 26:
+            ema_12 = SignalEngine._ema(closes, 12)
+            ema_26 = SignalEngine._ema(closes, 26)
+            # Align: ema_12 starts at index 12, ema_26 at index 26
+            offset = 26 - 12
+            macd_values = [ema_12[offset + i] - ema_26[i] for i in range(len(ema_26))]
+            macd_line = macd_values[-1] if macd_values else 0
+            if len(macd_values) >= 9:
+                signal_ema = SignalEngine._ema(macd_values, 9)
+                macd_signal = signal_ema[-1] if signal_ema else 0
+            macd_histogram = macd_line - macd_signal
+
+        # Bollinger Bands (20-period SMA, 2 std dev)
+        bb_upper = bb_lower = bb_pct = 0.0
+        bb_period = min(20, len(closes))
+        if bb_period >= 5:
+            bb_sma = sum(closes[-bb_period:]) / bb_period
+            bb_var = sum((c - bb_sma) ** 2 for c in closes[-bb_period:]) / bb_period
+            bb_std = bb_var ** 0.5
+            bb_upper = bb_sma + 2 * bb_std
+            bb_lower = bb_sma - 2 * bb_std
+            bb_width = bb_upper - bb_lower
+            bb_pct = (closes[-1] - bb_lower) / bb_width if bb_width > 0 else 0.5
+
         # Trend score
         trend_score = (sma_5 - sma_10) / sma_10 * 100
 
         # RSI score: -1 to 1
         rsi_score = (rsi - 50) / 50
 
-        # Composite
-        composite = trend_score * 0.4 + momentum * 0.3 + rsi_score * 0.3
+        # MACD score: normalized by price
+        macd_score = (macd_histogram / mean_price * 100) if mean_price else 0
+
+        # Bollinger score: -1 (below lower) to 1 (above upper), 0 = at SMA
+        bb_score = (bb_pct - 0.5) * 2
+
+        # Composite (weighted blend of all indicators)
+        composite = (
+            trend_score * 0.3
+            + momentum * 0.2
+            + rsi_score * 0.2
+            + macd_score * 0.2
+            + bb_score * 0.1
+        )
 
         return {
             "sma_5": sma_5,
@@ -147,8 +198,16 @@ class SignalEngine:
             "rsi": rsi,
             "momentum": momentum,
             "volatility": volatility,
+            "macd_line": macd_line,
+            "macd_signal": macd_signal,
+            "macd_histogram": macd_histogram,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_pct": bb_pct,
             "trend_score": trend_score,
             "rsi_score": rsi_score,
+            "macd_score": macd_score,
+            "bb_score": bb_score,
             "composite": composite,
         }
 
@@ -212,6 +271,19 @@ class SignalEngine:
             reasons.append(f"SMA5 ({st['sma_5']:.0f}) > SMA10 ({st['sma_10']:.0f})")
         else:
             reasons.append(f"SMA5 ({st['sma_5']:.0f}) < SMA10 ({st['sma_10']:.0f})")
+
+        # MACD crossover info
+        if st.get("macd_histogram", 0) > 0:
+            reasons.append(f"MACD bullish ({st['macd_histogram']:.2f})")
+        elif st.get("macd_histogram", 0) < 0:
+            reasons.append(f"MACD bearish ({st['macd_histogram']:.2f})")
+
+        # Bollinger Band position
+        bb_pct = st.get("bb_pct", 0.5)
+        if bb_pct > 0.9:
+            reasons.append(f"Near upper Bollinger ({bb_pct:.0%})")
+        elif bb_pct < 0.1:
+            reasons.append(f"Near lower Bollinger ({bb_pct:.0%})")
 
         if abs(change_24h) > 3:
             reasons.append(f"24h change {change_24h:+.1f}%")
