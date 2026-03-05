@@ -47,6 +47,7 @@ Built for the [ERC-8004 AI Trading Agents Hackathon](https://lablab.ai/ai-hackat
 | `/identity` | GET | ERC-8004 identity info |
 | `/reputation` | GET | On-chain reputation summary |
 | `/track-record` | GET | Signal generation statistics |
+| `/backtest` | GET | Historical backtest with win rate and Sharpe ratio |
 | `/register` | POST | Register agent on ERC-8004 |
 | `/record-outcome` | POST | Record signal outcome as reputation |
 

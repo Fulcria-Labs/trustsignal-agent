@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
+from backtest import fetch_historical_ohlc, run_backtest
 from erc8004_client import ERC8004Client
 from signal_engine import Direction, SignalEngine
 
@@ -404,6 +405,40 @@ async def create_trade_intent(
         "action": action,
         "deadline_utc": datetime.fromtimestamp(deadline, tz=timezone.utc).isoformat(),
     }
+
+
+@app.get("/backtest")
+async def backtest_endpoint(
+    asset: str = Query(default="bitcoin", description="CoinGecko coin ID"),
+    days: int = Query(default=30, ge=7, le=90, description="Days of history (7-90)"),
+    lookahead: int = Query(default=6, ge=2, le=12, description="Candles to look ahead"),
+):
+    """Run a backtest of the signal engine on historical data.
+
+    This validates the agent's predictive ability with real historical data,
+    demonstrating that on-chain reputation reflects actual performance.
+    """
+    try:
+        ohlc = await fetch_historical_ohlc(asset, days)
+        result = run_backtest(ohlc, asset, lookahead)
+        return {
+            "asset": result.asset,
+            "days": days,
+            "candles": len(ohlc),
+            "total_signals": result.total_signals,
+            "trades_taken": result.wins + result.losses,
+            "wins": result.wins,
+            "losses": result.losses,
+            "win_rate": result.win_rate,
+            "avg_pnl_pct": result.avg_pnl_pct,
+            "total_pnl_pct": result.total_pnl_pct,
+            "max_win_pct": result.max_win_pct,
+            "max_loss_pct": result.max_loss_pct,
+            "sharpe_ratio": result.sharpe_ratio,
+            "recent_signals": result.signals[-10:],
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 if __name__ == "__main__":
