@@ -107,12 +107,19 @@ Each intent is signed with the agent's private key, binding trade decisions to t
 
 ## Signal Engine
 
-The technical analysis engine uses:
-- **SMA Crossover** (5/10 period) - Trend direction
-- **RSI** - Overbought/oversold detection with reversal signals
-- **Momentum** - Price change relative to recent range
-- **Volatility** - Normalized standard deviation for dynamic risk sizing
-- **Composite Score** - Weighted combination (40% trend + 30% momentum + 30% RSI)
+Multi-timeframe technical analysis engine:
+
+**Short-term (4h candles, 7-day):**
+- SMA Crossover (5/10 period), RSI, Momentum, Volatility
+
+**Medium-term (daily candles, 30-day):**
+- Same indicators computed on daily timeframe for trend confirmation
+
+**Multi-Timeframe Confluence:**
+- Directional signals only fire when both timeframes agree
+- MT confirmation boosts confidence by up to +10%
+- Reduces false signals from short-term noise
+- Composite Score: 40% trend + 30% momentum + 30% RSI
 
 ## Tech Stack
 
