@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass, asdict
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -118,7 +118,7 @@ class IdentityManager:
                 "trade-execution",
                 "risk-management"
             ]),
-            created_at=datetime.utcnow().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
             owner=self.account.address,
             agent_address=self.account.address,
         )

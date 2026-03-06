@@ -48,7 +48,7 @@ def warn(text: str):
 
 def demo(base_url: str = "http://localhost:8004"):
     client = httpx.Client(base_url=base_url, timeout=30)
-    total_steps = 8
+    total_steps = 9
 
     header("TrustSignal: AI Trading Agent with ERC-8004 Trust")
 
@@ -166,8 +166,29 @@ def demo(base_url: str = "http://localhost:8004"):
         kv("Reputation Registry", data["reputation_registry"])
         success("Agent registered on ERC-8004!")
 
-    # 8. Track record
-    step(8, total_steps, "Signal Track Record")
+    # 8. Historical Backtest
+    step(8, total_steps, "Historical Backtest (validates predictive ability)")
+    r = client.get("/backtest?asset=bitcoin&days=30&lookahead=6")
+    if r.status_code == 200:
+        bt = r.json()
+        kv("Asset", bt["asset"].upper())
+        kv("Period", f"{bt['days']} days ({bt['candles']} candles)")
+        kv("Trades", f"{bt['trades_taken']} ({bt['wins']}W / {bt['losses']}L)")
+        wr = bt["win_rate"]
+        wr_color = GREEN if wr > 0.5 else YELLOW if wr > 0.4 else RED
+        kv("Win Rate", f"{wr_color}{wr:.1%}{RESET}")
+        pnl = bt["total_pnl_pct"]
+        pnl_color = GREEN if pnl > 0 else RED
+        kv("Total PnL", f"{pnl_color}{pnl:+.2f}%{RESET}")
+        kv("Sharpe Ratio", f"{bt['sharpe_ratio']:.2f}")
+        kv("Best Trade", f"{GREEN}+{bt['max_win_pct']:.2f}%{RESET}")
+        kv("Worst Trade", f"{RED}{bt['max_loss_pct']:.2f}%{RESET}")
+        success("Backtest validates that reputation reflects real performance!")
+    else:
+        warn(f"Backtest failed: {r.json().get('error', 'unknown')}")
+
+    # 9. Track record
+    step(9, total_steps, "Signal Track Record")
     r = client.get("/track-record")
     stats = r.json()["stats"]
     kv("Total Signals", stats["total_signals"])
